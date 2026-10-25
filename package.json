@@ -1,0 +1,54 @@
+{
+  "name": "gateway-guard",
+  "version": "0.1.0",
+  "description": "Unified payment gateway SDK with automatic failover between providers (Razorpay, PhonePe, and more).",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:cov": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "format:check": "prettier --check .",
+    "check": "npm run typecheck && npm run format:check && npm run test"
+  },
+  "keywords": [
+    "payments",
+    "payment-gateway",
+    "razorpay",
+    "phonepe",
+    "failover",
+    "circuit-breaker",
+    "sdk"
+  ],
+  "author": "Nihar Pithava",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^2.1.8",
+    "prettier": "^3.4.2",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "files": [
+    "dist"
+  ]
+}
