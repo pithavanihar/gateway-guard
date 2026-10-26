@@ -7,3 +7,5 @@ export * from "./http.js";
 export * from "./adapters/Adapter.js";
 export * from "./adapters/razorpay/classify.js";
 export * from "./adapters/razorpay/RazorpayAdapter.js";
+export * from "./adapters/cashfree/classify.js";
+export * from "./adapters/cashfree/CashfreeAdapter.js";

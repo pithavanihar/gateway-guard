@@ -1,0 +1,27 @@
+[
+  {
+    "cf_payment_id": "975672265",
+    "order_id": "att_3f0b6c1e-8d2a-4b7e-9c41-5a6d7e8f9012",
+    "entity": "payment",
+    "payment_currency": "INR",
+    "error_details": null,
+    "order_amount": 499,
+    "is_captured": false,
+    "payment_group": "net_banking",
+    "authorization": null,
+    "payment_method": {
+      "netbanking": {
+        "channel": null,
+        "netbanking_bank_code": "3044",
+        "netbanking_bank_name": "State Bank Of India"
+      }
+    },
+    "payment_amount": 499,
+    "payment_time": "2023-03-02T18:30:34+05:30",
+    "payment_completion_time": "2023-03-02T18:40:38+05:30",
+    "payment_status": "USER_DROPPED",
+    "payment_message": "User dropped and did not complete the two factor authentication",
+    "bank_reference": "1803592531",
+    "auth_id": "2980"
+  }
+]

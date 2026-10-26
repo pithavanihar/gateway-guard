@@ -1,0 +1,30 @@
+{
+  "cf_order_id": "2149460581",
+  "created_at": "2023-08-11T18:02:46+05:30",
+  "customer_details": {
+    "customer_id": "409128494",
+    "customer_name": "Johmn Doe",
+    "customer_email": "pmlpayme@ntsas.com",
+    "customer_phone": "9876543210",
+    "customer_uid": "54deabb4-ba45-4a60-9e6a-9c016fe7ab10"
+  },
+  "entity": "order",
+  "order_amount": 499,
+  "payment_session_id": "session_a1VXIPJo8kh7IBigVXX8LgTMupQW_cu25FS8KwLwQLOmiHqbBxq5UhEilrhbDSKKHA6UAuOj9506aaHNlFAHEqYrHSEl9AVtYQN9LIIc4vkH",
+  "order_currency": "INR",
+  "order_expiry_time": "2023-09-09T18:02:46+05:30",
+  "order_id": "att_3f0b6c1e-8d2a-4b7e-9c41-5a6d7e8f9012",
+  "order_meta": {
+    "return_url": "https://www.cashfree.com/devstudio/thankyou",
+    "payment_methods": "upi",
+    "notify_url": "https://example.com/cf_notify"
+  },
+  "order_note": null,
+  "order_splits": [],
+  "order_status": "ACTIVE",
+  "order_tags": {
+    "orderId": "ord_1001"
+  },
+  "terminal_data": null,
+  "cart_details": null
+}

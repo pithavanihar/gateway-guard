@@ -1,0 +1,31 @@
+[
+  {
+    "auth_id": null,
+    "authorization": null,
+    "bank_reference": "306118259130",
+    "cf_payment_id": 1636676360,
+    "entity": "payment",
+    "error_details": {
+      "error_code": "TRANSACTION_DECLINED",
+      "error_description": "transaction is rejected at the remitter bank end. Please reach out to issuer bank",
+      "error_reason": "bank_rejected",
+      "error_source": "bank"
+    },
+    "is_captured": false,
+    "order_amount": 499,
+    "order_id": "att_3f0b6c1e-8d2a-4b7e-9c41-5a6d7e8f9012",
+    "payment_amount": 499,
+    "payment_completion_time": "2023-03-02T18:24:51+05:30",
+    "payment_currency": "INR",
+    "payment_group": "upi",
+    "payment_message": "01::REJECTED",
+    "payment_method": {
+      "upi": {
+        "channel": "collect",
+        "upi_id": "8XXXXXXXX2@upi"
+      }
+    },
+    "payment_status": "FAILED",
+    "payment_time": "2023-03-02T18:24:18+05:30"
+  }
+]
