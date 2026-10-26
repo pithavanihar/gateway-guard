@@ -33,6 +33,12 @@ export interface GatewayAdapter {
   supports(method: PaymentMethod): boolean;
   createOrder(input: CreateOrderInput): Promise<{ gatewayRef: string; checkout: Checkout }>;
   fetchStatus(gatewayRef: string): Promise<StatusResult>;
+  /**
+   * Stops further payments on an order, where the gateway supports it. Resolves once the
+   * gateway has accepted the request; rejects if the order could not be stopped (for
+   * example because it was already paid).
+   */
+  cancelOrder?(gatewayRef: string): Promise<void>;
   verifyCallback(gatewayRef: string, payload: unknown): Promise<Outcome>;
   verifyWebhook(
     rawBody: string | Uint8Array,

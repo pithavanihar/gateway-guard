@@ -1,7 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { InvalidSignatureError, ValidationError } from "../../errors.js";
 import { fetchJson, type HttpDeps } from "../../http.js";
 import type { Checkout, Outcome, PaymentMethod } from "../../types.js";
+import { headerValue, isRecord, safeEqual } from "../signature.js";
 import type { CreateOrderInput, GatewayAdapter, StatusResult, WebhookEvent } from "../Adapter.js";
 import { classifyRazorpay } from "./classify.js";
 
@@ -45,13 +46,6 @@ function hmacHex(secret: string, data: string | Uint8Array): string {
   return createHmac("sha256", secret).update(data).digest("hex");
 }
 
-/** Constant-time comparison; different lengths are a mismatch, never a RangeError. */
-function safeEqual(expected: string, received: string): boolean {
-  const a = Buffer.from(expected, "utf8");
-  const b = Buffer.from(received, "utf8");
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
 function failureOf(p: RazorpayPayment): Pick<Outcome, "classification" | "reason"> {
   return {
     classification: classifyRazorpay({
@@ -72,22 +66,6 @@ function outcomeOf(p: RazorpayPayment): Outcome {
   if (PAID_STATUSES.has(p.status)) return withMethod({ status: "paid" }, p.method);
   if (p.status === "failed") return withMethod({ status: "failed", ...failureOf(p) }, p.method);
   return { status: "pending" };
-}
-
-function headerValue(
-  headers: Record<string, string | string[] | undefined>,
-  name: string,
-): string | undefined {
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== name) continue;
-    const v = Array.isArray(value) ? (value.length === 1 ? value[0] : undefined) : value;
-    return v ? v : undefined;
-  }
-  return undefined;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
 }
 
 export class RazorpayAdapter implements GatewayAdapter {

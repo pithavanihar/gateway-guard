@@ -470,3 +470,121 @@ describe("public exports", () => {
     expect(pkg.CASHFREE_CUSTOMER_STATUSES).toEqual(["USER_DROPPED", "CANCELLED"]);
   });
 });
+
+describe("createOrder input checks (R12)", () => {
+  const route = { [`POST ${SANDBOX}/orders`]: json("order.created.json") };
+
+  it("amountMinor 99 → ValidationError with no fetch", async () => {
+    const { cf, calls } = adapter(route);
+    await expect(cf.createOrder({ ...input, amountMinor: 99 })).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+    await expect(cf.createOrder({ ...input, amountMinor: 0 })).rejects.toBeInstanceOf(
+      ValidationError,
+    );
+    expect(calls).toHaveLength(0);
+    await cf.createOrder({ ...input, amountMinor: 100 });
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ order_amount: 1 });
+  });
+
+  it.each(["", "900009000", "90000900001", "90000-90000", "+91", "+91 9000090000", "phone12345"])(
+    "invalid phone %j → ValidationError with no fetch",
+    async (phone) => {
+      const { cf, calls } = adapter(route);
+      const err = await cf
+        .createOrder({ ...input, customer: { ...input.customer, phone } })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ValidationError);
+      if (phone) expect((err as Error).message).not.toContain(phone);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each(["9000090000", "+919000090000", "+14155550123"])(
+    "valid phone %s is sent unchanged",
+    async (phone) => {
+      const { cf, calls } = adapter(route);
+      await cf.createOrder({ ...input, customer: { ...input.customer, phone } });
+      const body = JSON.parse(String(calls[0]!.init.body)) as {
+        customer_details: { customer_phone: string };
+      };
+      expect(body.customer_details.customer_phone).toBe(phone);
+    },
+  );
+
+  it.each([
+    ["c1", "0c1"],
+    ["user 42!", "user42"],
+    ["cust_1001-a", "cust1001a"],
+    ["!!", "000"],
+    ["x".repeat(60), "x".repeat(50)],
+    ["cust1001", "cust1001"],
+  ])("customer id %j is normalised to %j", async (id, expected) => {
+    const { cf, calls } = adapter(route);
+    await cf.createOrder({ ...input, customer: { ...input.customer, id } });
+    const body = JSON.parse(String(calls[0]!.init.body)) as {
+      customer_details: { customer_id: string };
+    };
+    expect(body.customer_details.customer_id).toBe(expected);
+  });
+});
+
+describe("cancelOrder (R13)", () => {
+  const url = `PATCH ${SANDBOX}/orders/${ATT}`;
+  const order = (order_status: string) => ({
+    ...json<Record<string, unknown>>("order.created.json"),
+    order_status,
+  });
+
+  it("terminates the order with PATCH order_status TERMINATED", async () => {
+    const { cf, calls } = adapter({ [url]: order("TERMINATED") });
+    await expect(cf.cancelOrder(ATT)).resolves.toBeUndefined();
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.url).toBe(`${SANDBOX}/orders/${ATT}`);
+    expect(call.init.method).toBe("PATCH");
+    expect(JSON.parse(String(call.init.body))).toEqual({ order_status: "TERMINATED" });
+    expect(header(call.init, "x-api-version")).toBe("2023-08-01");
+    expect(header(call.init, "x-client-id")).toBe(cfg.appId);
+    expect(header(call.init, "x-client-secret")).toBe(cfg.secretKey);
+    expect(header(call.init, "content-type")).toBe("application/json");
+  });
+
+  it("accepts TERMINATION_REQUESTED and EXPIRED", async () => {
+    for (const s of ["TERMINATION_REQUESTED", "EXPIRED"]) {
+      const { cf } = adapter({ [url]: order(s) });
+      await expect(cf.cancelOrder(ATT)).resolves.toBeUndefined();
+    }
+  });
+
+  it("rejects when the order was paid or stays active", async () => {
+    const paid = adapter({ [url]: order("PAID") });
+    await expect(paid.cf.cancelOrder(ATT)).rejects.toMatchObject({
+      gateway: "cashfree",
+      reason: "order_paid",
+      classification: "unknown",
+    });
+    const active = adapter({ [url]: order("ACTIVE") });
+    await expect(active.cf.cancelOrder(ATT)).rejects.toMatchObject({
+      gateway: "cashfree",
+      reason: "not_terminated",
+    });
+  });
+
+  it("URL-encodes the order id and uses the production URL in production", async () => {
+    const s = adapter();
+    await s.cf.cancelOrder("a/b?c").catch(() => undefined);
+    expect(s.calls[0]!.url).toBe(`${SANDBOX}/orders/a%2Fb%3Fc`);
+    const p = adapter({ [`PATCH ${PROD}/orders/${ATT}`]: order("TERMINATED") }, "production");
+    await p.cf.cancelOrder(ATT);
+    expect(p.calls[0]!.url).toBe(`${PROD}/orders/${ATT}`);
+  });
+
+  it("never leaks credentials when termination fails", async () => {
+    const fail = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+    const cf = new CashfreeAdapter(cfg, { fetch: fail, timeoutMs: 1000 });
+    const err = (await cf.cancelOrder(ATT).catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(`${err.message} ${err.stack ?? ""} ${JSON.stringify(err)}`).not.toContain(cfg.secretKey);
+  });
+});

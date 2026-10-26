@@ -1,7 +1,8 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { GatewayRequestError, InvalidSignatureError, ValidationError } from "../../errors.js";
 import { fetchJson, type HttpDeps } from "../../http.js";
 import type { Checkout, Outcome, PaymentMethod } from "../../types.js";
+import { headerValue, isRecord, safeEqual } from "../signature.js";
 import type { CreateOrderInput, GatewayAdapter, StatusResult, WebhookEvent } from "../Adapter.js";
 import { classifyCashfree } from "./classify.js";
 
@@ -70,6 +71,37 @@ export function paiseToRupees(amountMinor: number): number {
   return Number(`${rupees}.${String(paise).padStart(2, "0")}`);
 }
 
+/** Cashfree's minimum `order_amount` is 1 rupee. */
+export const CASHFREE_MIN_AMOUNT_MINOR = 100;
+
+// A 10-digit number, or "+" then an international number (E.164: up to 15 digits).
+const PHONE = /^(?:\d{10}|\+[1-9]\d{7,14})$/;
+
+/**
+ * Cashfree's `customer_id` must be 3-50 alphanumeric characters. Other characters are
+ * dropped, short ids are left-padded with "0" and long ids are cut to 50.
+ */
+function cashfreeCustomerId(id: string): string {
+  return id
+    .replace(/[^A-Za-z0-9]/g, "")
+    .slice(0, 50)
+    .padStart(3, "0");
+}
+
+function validateOrderInput(input: CreateOrderInput): void {
+  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < CASHFREE_MIN_AMOUNT_MINOR) {
+    throw new ValidationError("cashfree amountMinor must be at least 100 (1 rupee)");
+  }
+  if (typeof input.customer?.phone !== "string" || !PHONE.test(input.customer.phone)) {
+    throw new ValidationError(
+      'cashfree customer.phone must be 10 digits or "+" followed by an international number',
+    );
+  }
+  if (typeof input.customer.id !== "string") {
+    throw new ValidationError("cashfree customer.id is required");
+  }
+}
+
 function mapMethod(group: unknown): PaymentMethod | undefined {
   if (typeof group !== "string") return undefined;
   // upi, upi_credit_card, upi_ppi, upi_ppi_offline, ...
@@ -118,29 +150,6 @@ function timeOf(p: CashfreePayment): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
-function headerValue(
-  headers: Record<string, string | string[] | undefined>,
-  name: string,
-): string | undefined {
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== name) continue;
-    const v = Array.isArray(value) ? (value.length === 1 ? value[0] : undefined) : value;
-    return v ? v : undefined;
-  }
-  return undefined;
-}
-
-/** Constant-time comparison; different lengths are a mismatch, never a RangeError. */
-function safeEqual(expected: string, received: string): boolean {
-  const a = Buffer.from(expected, "utf8");
-  const b = Buffer.from(received, "utf8");
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
 export class CashfreeAdapter implements GatewayAdapter {
   readonly name = "cashfree" as const;
   readonly #appId: string;
@@ -168,13 +177,14 @@ export class CashfreeAdapter implements GatewayAdapter {
   }
 
   async createOrder(input: CreateOrderInput): Promise<{ gatewayRef: string; checkout: Checkout }> {
+    validateOrderInput(input);
     const { customer } = input;
     const order = await this.#request<CashfreeOrder>("POST", "/orders", {
       order_id: input.attemptId,
       order_amount: paiseToRupees(input.amountMinor),
       order_currency: input.currency,
       customer_details: {
-        customer_id: customer.id,
+        customer_id: cashfreeCustomerId(customer.id),
         customer_phone: customer.phone,
         ...(customer.email ? { customer_email: customer.email } : {}),
         ...(customer.name ? { customer_name: customer.name } : {}),
@@ -210,6 +220,27 @@ export class CashfreeAdapter implements GatewayAdapter {
     // All failed: report the most recent attempt, regardless of response order.
     const latest = attempted.reduce((a, b) => (timeOf(b) >= timeOf(a) ? b : a));
     return outcomeOf(latest);
+  }
+
+  /**
+   * Terminates the order (`PATCH /orders/{order_id}` with `order_status: "TERMINATED"`).
+   * `TERMINATED`, `TERMINATION_REQUESTED` and `EXPIRED` mean no further payment can start.
+   * A `PAID` order, or any other status, rejects with a `GatewayRequestError`.
+   */
+  async cancelOrder(gatewayRef: string): Promise<void> {
+    const res = await this.#request<unknown>("PATCH", `/orders/${encodeURIComponent(gatewayRef)}`, {
+      order_status: "TERMINATED",
+    });
+    const status = isRecord(res) ? res.order_status : undefined;
+    if (status === "TERMINATED" || status === "TERMINATION_REQUESTED" || status === "EXPIRED") {
+      return;
+    }
+    throw new GatewayRequestError(
+      "cashfree",
+      200,
+      "unknown",
+      status === "PAID" ? "order_paid" : "not_terminated",
+    );
   }
 
   /**
@@ -272,7 +303,7 @@ export class CashfreeAdapter implements GatewayAdapter {
     return base;
   }
 
-  #request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  #request<T>(method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = {
       "x-client-id": this.#appId,
       "x-client-secret": this.#secretKey,
