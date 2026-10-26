@@ -54,6 +54,18 @@ export class AttemptRegistry {
     return true;
   }
 
+  /**
+   * Upgrades an attempt already finalised as failed to paid (a gateway can report a
+   * success after a failure, e.g. a customer retrying inside the same checkout). Money
+   * moved, so it must not be dropped. Returns true only on the upgrade itself.
+   */
+  supersedeWithPaid(attemptId: string): boolean {
+    const a = this.get(attemptId);
+    if (!a || a.final !== "failed") return false;
+    a.final = "paid";
+    return true;
+  }
+
   prune(): void {
     for (const a of [...this.byId.values()]) {
       if (this.expired(a)) {

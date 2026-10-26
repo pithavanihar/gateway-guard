@@ -57,6 +57,26 @@ describe("Router", () => {
     expect(router.candidates("upi")).toEqual(["cashfree", "razorpay"]);
   });
 
+  it("retry when every gateway is down reports all-down", () => {
+    const { router, tracker } = setup();
+    openIt(tracker, "razorpay", "upi", 0);
+    openIt(tracker, "cashfree", "upi", 1);
+    expect(router.choose("upi", { avoid: "razorpay" })).toEqual({
+      gateway: "cashfree",
+      reason: "all-down",
+    });
+  });
+
+  it("plan returns the candidate order and the reason in one ranking", () => {
+    const { router, tracker } = setup();
+    openIt(tracker, "razorpay", "netbanking");
+    expect(router.plan("netbanking")).toEqual({
+      order: ["cashfree", "razorpay"],
+      reason: "failover",
+      preferred: "razorpay",
+    });
+  });
+
   it("candidates honours exclude and ordering", () => {
     const { router } = setup();
     expect(router.candidates("upi", { exclude: ["razorpay"] })).toEqual(["cashfree"]);

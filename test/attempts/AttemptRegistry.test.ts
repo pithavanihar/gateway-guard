@@ -22,6 +22,17 @@ describe("AttemptRegistry", () => {
     expect(r.markFinal("missing", "paid")).toBe(false);
   });
 
+  it("supersedeWithPaid upgrades a failed attempt once", () => {
+    const r = new AttemptRegistry({ now: () => 0 });
+    r.add(base);
+    expect(r.supersedeWithPaid("att_1")).toBe(false);
+    r.markFinal("att_1", "failed");
+    expect(r.supersedeWithPaid("att_1")).toBe(true);
+    expect(r.get("att_1")?.final).toBe("paid");
+    expect(r.supersedeWithPaid("att_1")).toBe(false);
+    expect(r.supersedeWithPaid("missing")).toBe(false);
+  });
+
   it("findByGatewayRef finds the attempt", () => {
     const r = new AttemptRegistry({ now: () => 0 });
     r.add(base);

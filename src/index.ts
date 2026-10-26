@@ -9,3 +9,5 @@ export * from "./adapters/razorpay/classify.js";
 export * from "./adapters/razorpay/RazorpayAdapter.js";
 export * from "./adapters/cashfree/classify.js";
 export * from "./adapters/cashfree/CashfreeAdapter.js";
+export * from "./events.js";
+export * from "./GatewayGuard.js";

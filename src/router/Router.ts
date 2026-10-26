@@ -26,17 +26,29 @@ export class Router {
     method: PaymentMethod,
     opts: RouteOptions = {},
   ): { gateway: GatewayName; reason: RouteReason } {
-    const { order, firstSupporting, anyUsable } = this.rank(method, opts);
-    const gateway = order[0] as GatewayName;
-    let reason: RouteReason;
-    if (opts.avoid !== undefined && gateway !== opts.avoid) reason = "retry";
-    else if (!anyUsable) reason = "all-down";
-    else reason = gateway === firstSupporting ? "preferred" : "failover";
-    return { gateway, reason };
+    const { order, reason } = this.plan(method, opts);
+    return { gateway: order[0] as GatewayName, reason };
   }
 
   candidates(method: PaymentMethod, opts: RouteOptions = {}): GatewayName[] {
     return this.rank(method, opts).order;
+  }
+
+  /**
+   * `candidates()` plus the reason for the first candidate and the preferred (first
+   * supporting) gateway, from a single ranking (one `isUsable` draw per gateway).
+   */
+  plan(
+    method: PaymentMethod,
+    opts: RouteOptions = {},
+  ): { order: GatewayName[]; reason: RouteReason; preferred: GatewayName } {
+    const { order, firstSupporting, anyUsable } = this.rank(method, opts);
+    const gateway = order[0] as GatewayName;
+    let reason: RouteReason;
+    if (!anyUsable) reason = "all-down";
+    else if (opts.avoid !== undefined && gateway !== opts.avoid) reason = "retry";
+    else reason = gateway === firstSupporting ? "preferred" : "failover";
+    return { order, reason, preferred: firstSupporting };
   }
 
   private rank(method: PaymentMethod, opts: RouteOptions): Ranked {
