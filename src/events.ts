@@ -22,6 +22,8 @@ export type GuardEvent =
       to: GatewayName;
       why: "unhealthy" | "create-error" | "retry";
     }
+  /** Nothing was usable for the method; routing picked the least-bad gateway. */
+  | { type: "route.all-down"; method: PaymentMethod; chosen: GatewayName }
   | { type: "webhook.unmatched"; event: WebhookEvent }
   /**
    * More than one attempt of the same `orderId` was confirmed paid: the customer was

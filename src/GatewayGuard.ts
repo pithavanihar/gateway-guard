@@ -70,6 +70,10 @@ export class GatewayGuard {
   private readonly now: () => number;
   /** Confirmed-paid attempts per orderId, to detect a customer charged twice. */
   private readonly paidByOrder = new Map<string, Map<string, Attempt>>();
+  /** The most recent attempt per orderId: the only one that may be retried. */
+  private readonly latestByOrder = new Map<string, string>();
+  /** orderIds with a createPayment in progress. */
+  private readonly inFlight = new Set<string>();
 
   constructor(opts: GatewayGuardOptions) {
     const now = opts.now ?? Date.now;
@@ -107,12 +111,37 @@ export class GatewayGuard {
     return this.tracker.snapshot();
   }
 
+  /**
+   * Creates a payment attempt. At most one payable order per orderId: a later payment for
+   * the same order must pass `retryOf` = the order's latest attempt (otherwise
+   * `RetryNotAllowedError("superseded")`), and only one call per orderId runs at a time
+   * (otherwise `"in-progress"`).
+   */
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
     validatePaymentInput(input);
+    // Taken synchronously, before any await, so concurrent calls cannot both pass the checks.
+    if (this.inFlight.has(input.orderId)) throw new RetryNotAllowedError("in-progress");
+    this.inFlight.add(input.orderId);
+    try {
+      return await this.create(input);
+    } finally {
+      this.inFlight.delete(input.orderId);
+    }
+  }
+
+  private async create(input: CreatePaymentInput): Promise<CreatePaymentResult> {
     const { orderId, amountMinor, currency, method, customer } = input;
+    this.pruneLatest();
+    const latest = this.latestAttempt(orderId);
 
     let avoid: GatewayName | undefined;
-    if (input.retryOf !== undefined) avoid = await this.checkRetry(input.retryOf, orderId);
+    if (input.retryOf === undefined) {
+      if (latest) throw new RetryNotAllowedError("superseded");
+    } else {
+      avoid = await this.checkRetry(input.retryOf, orderId, latest);
+      // A paid confirmation may have arrived while the checks above were awaiting.
+      if (this.paidByOrder.has(orderId)) throw new RetryNotAllowedError("paid");
+    }
 
     // One ranking per payment; creation-time failover walks this list.
     const plan = this.router.plan(method, avoid === undefined ? {} : { avoid });
@@ -127,6 +156,8 @@ export class GatewayGuard {
         to: first,
         why: "unhealthy",
       });
+    } else if (plan.reason === "all-down") {
+      this.emit({ type: "route.all-down", method, chosen: first });
     }
 
     let lastError: unknown;
@@ -173,6 +204,7 @@ export class GatewayGuard {
         createdAt: this.now(),
       };
       this.registry.add(attempt);
+      this.latestByOrder.set(orderId, attemptId);
       const reason: RouteReason =
         i === 0 ? plan.reason : plan.reason === "all-down" ? "all-down" : "failover";
       this.emit({ type: "attempt.created", attempt: { ...attempt }, reason });
@@ -210,12 +242,18 @@ export class GatewayGuard {
   }
 
   /** Returns the gateway to avoid, or throws if retrying could charge the customer twice. */
-  private async checkRetry(retryOf: string, orderId: string): Promise<GatewayName> {
+  private async checkRetry(
+    retryOf: string,
+    orderId: string,
+    latest: Attempt | undefined,
+  ): Promise<GatewayName> {
     const prev = this.registry.get(retryOf);
     if (!prev) throw new RetryNotAllowedError("unknown-attempt");
     if (prev.orderId !== orderId) {
       throw new ValidationError("retryOf must refer to an attempt of the same orderId");
     }
+    // Only the latest attempt may be retried: an older one already has a live successor.
+    if (latest?.attemptId !== prev.attemptId) throw new RetryNotAllowedError("superseded");
     if (this.paidByOrder.has(orderId)) throw new RetryNotAllowedError("paid");
 
     const adapter = this.adapter(prev.gateway);
@@ -291,6 +329,18 @@ export class GatewayGuard {
       if ([...paid.keys()].every((id) => this.registry.get(id) === undefined)) {
         this.paidByOrder.delete(orderId);
       }
+    }
+  }
+
+  private latestAttempt(orderId: string): Attempt | undefined {
+    const id = this.latestByOrder.get(orderId);
+    return id === undefined ? undefined : this.registry.get(id);
+  }
+
+  /** Forgets orders whose latest attempt has expired from the registry. */
+  private pruneLatest(): void {
+    for (const [orderId, id] of this.latestByOrder) {
+      if (this.registry.get(id) === undefined) this.latestByOrder.delete(orderId);
     }
   }
 

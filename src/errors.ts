@@ -25,7 +25,13 @@ export class InvalidSignatureError extends GatewayGuardError {
   }
 }
 
-export type RetryNotAllowedReason = "paid" | "pending" | "status-unknown" | "unknown-attempt";
+/**
+ * - `superseded`: `retryOf` is not the latest attempt of its order (it was already retried),
+ *   or a payment without `retryOf` was requested for an order that already has an attempt.
+ * - `in-progress`: another `createPayment` for the same orderId is still running.
+ */
+export type RetryNotAllowedReason =
+  "paid" | "pending" | "status-unknown" | "unknown-attempt" | "superseded" | "in-progress";
 
 export class RetryNotAllowedError extends GatewayGuardError {
   readonly reason: RetryNotAllowedReason;

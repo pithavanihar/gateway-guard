@@ -103,6 +103,7 @@ function setup(opts: { onListenerError?: (e: unknown, ev: GuardEvent) => void } 
     "route.failover",
     "webhook.unmatched",
     "order.multiple-payments",
+    "route.all-down",
   ] as const) {
     guard.on(type, (e) => events.push(e));
   }
@@ -126,13 +127,15 @@ describe("GatewayGuard", () => {
     const { guard, rp, events } = setup();
     rp.verifyCallback.mockResolvedValue({ status: "failed", classification: "gateway" });
     for (let i = 0; i < 5; i++) {
-      const { attemptId, gateway } = await guard.createPayment(input("netbanking"));
+      const { attemptId, gateway } = await guard.createPayment(
+        input("netbanking", { orderId: `nb_${i}` }),
+      );
       expect(gateway).toBe("razorpay");
       await guard.verifyPayment(attemptId, {});
     }
     expect(events.some((e) => e.type === "health.changed")).toBe(true);
 
-    const nb = await guard.createPayment(input("netbanking"));
+    const nb = await guard.createPayment(input("netbanking", { orderId: "nb_next" }));
     expect(nb.gateway).toBe("cashfree");
     expect(events).toContainEqual({
       type: "route.failover",
@@ -152,7 +155,7 @@ describe("GatewayGuard", () => {
     const { guard, rp, events } = setup();
     rp.verifyCallback.mockResolvedValue({ status: "failed", classification: "customer" });
     for (let i = 0; i < 10; i++) {
-      const { attemptId } = await guard.createPayment(input());
+      const { attemptId } = await guard.createPayment(input("upi", { orderId: `o_${i}` }));
       await guard.verifyPayment(attemptId, {});
     }
     const next = await guard.createPayment(input());
@@ -234,13 +237,139 @@ describe("GatewayGuard", () => {
   it("retry refused when another attempt of the order is already paid", async () => {
     const { guard, rp } = setup();
     const a = await guard.createPayment(input());
-    const b = await guard.createPayment(input());
-    await guard.verifyPayment(b.attemptId, {}); // paid
     rp.fetchStatus.mockResolvedValue({ status: "failed" });
+    const b = await guard.createPayment(input("upi", { retryOf: a.attemptId }));
+    await guard.verifyPayment(b.attemptId, {}); // paid
+    const err = await guard
+      .createPayment(input("upi", { retryOf: b.attemptId }))
+      .catch((e: unknown) => e);
+    expect((err as RetryNotAllowedError).reason).toBe("paid");
+  });
+
+  it("retrying the same attempt twice is refused as superseded", async () => {
+    const { guard, rp, cf } = setup();
+    const a = await guard.createPayment(input());
+    rp.fetchStatus.mockResolvedValue({ status: "failed" });
+    const b = await guard.createPayment(input("upi", { retryOf: a.attemptId }));
+    expect(b.gateway).toBe("cashfree");
     const err = await guard
       .createPayment(input("upi", { retryOf: a.attemptId }))
       .catch((e: unknown) => e);
-    expect((err as RetryNotAllowedError).reason).toBe("paid");
+    expect(err).toBeInstanceOf(RetryNotAllowedError);
+    expect((err as RetryNotAllowedError).reason).toBe("superseded");
+    expect(rp.createOrder).toHaveBeenCalledTimes(1);
+    expect(cf.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent retries of the same attempt: exactly one succeeds", async () => {
+    const { guard, rp, cf } = setup();
+    const a = await guard.createPayment(input());
+    rp.fetchStatus.mockResolvedValue({ status: "failed" });
+    const results = await Promise.allSettled([
+      guard.createPayment(input("upi", { retryOf: a.attemptId })),
+      guard.createPayment(input("upi", { retryOf: a.attemptId })),
+    ]);
+    const ok = results.filter((r) => r.status === "fulfilled");
+    const refused = results.filter((r) => r.status === "rejected");
+    expect(ok).toHaveLength(1);
+    expect(refused).toHaveLength(1);
+    const reason = (refused[0] as PromiseRejectedResult).reason as RetryNotAllowedError;
+    expect(reason).toBeInstanceOf(RetryNotAllowedError);
+    expect(reason.reason).toBe("in-progress");
+    expect(cf.createOrder).toHaveBeenCalledTimes(1);
+    expect(rp.fetchStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("the in-flight lock is released after a refused retry", async () => {
+    const { guard, rp } = setup();
+    const a = await guard.createPayment(input());
+    rp.fetchStatus.mockResolvedValueOnce({ status: "pending" });
+    await expect(guard.createPayment(input("upi", { retryOf: a.attemptId }))).rejects.toMatchObject(
+      { reason: "pending" },
+    );
+    rp.fetchStatus.mockResolvedValueOnce({ status: "failed" });
+    const b = await guard.createPayment(input("upi", { retryOf: a.attemptId }));
+    expect(b.gateway).toBe("cashfree");
+  });
+
+  it("a paid confirmation arriving during the status lookup refuses the retry", async () => {
+    const { guard, rp, cf } = setup();
+    const a = await guard.createPayment(input());
+    let release: () => void = () => {};
+    rp.fetchStatus.mockImplementationOnce(
+      () =>
+        new Promise<StatusResult>((resolve) => {
+          release = () => resolve({ status: "failed" }); // stale view
+        }),
+    );
+    const retry = guard.createPayment(input("upi", { retryOf: a.attemptId }));
+    await Promise.resolve();
+    guard.verifyWebhook("razorpay", webhook("razorpay_ref_1", "paid"), good);
+    release();
+    await expect(retry).rejects.toMatchObject({ reason: "paid" });
+    expect(cf.createOrder).not.toHaveBeenCalled();
+  });
+
+  it("a new payment for an order with a creation in flight is refused as in-progress", async () => {
+    const { guard, rp } = setup();
+    const first = guard.createPayment(input());
+    const err = await guard.createPayment(input()).catch((e: unknown) => e);
+    expect((err as RetryNotAllowedError).reason).toBe("in-progress");
+    await expect(first).resolves.toMatchObject({ gateway: "razorpay" });
+    expect(rp.createOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("a new payment without retryOf for an order that has an attempt is refused as superseded", async () => {
+    const { guard, rp } = setup();
+    await guard.createPayment(input());
+    const err = await guard.createPayment(input()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RetryNotAllowedError);
+    expect((err as RetryNotAllowedError).reason).toBe("superseded");
+    expect(rp.createOrder).toHaveBeenCalledTimes(1);
+    // Other orders are unaffected.
+    await expect(guard.createPayment(input("upi", { orderId: "order_2" }))).resolves.toBeDefined();
+  });
+
+  it("emits route.all-down when nothing is usable", async () => {
+    const { guard, rp, cf, events } = setup();
+    rp.verifyCallback.mockResolvedValue({ status: "failed", classification: "gateway" });
+    cf.verifyCallback.mockResolvedValue({ status: "failed", classification: "gateway" });
+    for (let i = 0; i < 5; i++) {
+      const r = await guard.createPayment(input("upi", { orderId: `r_${i}` }));
+      await guard.verifyPayment(r.attemptId, {});
+    }
+    // razorpay:upi is down now; the next five go to cashfree and take it down too.
+    for (let i = 0; i < 5; i++) {
+      const c = await guard.createPayment(input("upi", { orderId: `c_${i}` }));
+      expect(c.gateway).toBe("cashfree");
+      await guard.verifyPayment(c.attemptId, {});
+    }
+    expect(events.some((e) => e.type === "route.all-down")).toBe(false);
+
+    const res = await guard.createPayment(input("upi", { orderId: "x" }));
+    expect(events).toContainEqual({ type: "route.all-down", method: "upi", chosen: res.gateway });
+    expect(events.filter((e) => e.type === "attempt.created").at(-1)).toMatchObject({
+      reason: "all-down",
+    });
+
+    // Retry when every gateway is down: all-down, not retry.
+    rp.fetchStatus.mockResolvedValue({ status: "failed" });
+    cf.fetchStatus.mockResolvedValue({ status: "failed" });
+    const before = events.filter((e) => e.type === "route.all-down").length;
+    const retry = await guard.createPayment(input("upi", { orderId: "x", retryOf: res.attemptId }));
+    const allDown = events.filter((e) => e.type === "route.all-down");
+    expect(allDown).toHaveLength(before + 1);
+    expect(allDown.at(-1)).toEqual({
+      type: "route.all-down",
+      method: "upi",
+      chosen: retry.gateway,
+    });
+    expect(events.filter((e) => e.type === "attempt.created").at(-1)).toMatchObject({
+      reason: "all-down",
+    });
+    expect(
+      events.some((e) => e.type === "route.failover" && e.why === "retry" && e.method === "upi"),
+    ).toBe(false);
   });
 
   it("retry of a cashfree attempt cancels the old order before routing", async () => {
@@ -470,7 +599,7 @@ describe("GatewayGuard", () => {
     });
     rp.verifyCallback.mockResolvedValue({ status: "failed", classification: "gateway" });
     for (let i = 0; i < 5; i++) {
-      const { attemptId } = await guard.createPayment(input());
+      const { attemptId } = await guard.createPayment(input("upi", { orderId: `o_${i}` }));
       await expect(guard.verifyPayment(attemptId, {})).resolves.toMatchObject({
         status: "failed",
       });
