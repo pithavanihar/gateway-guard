@@ -13,7 +13,8 @@ import type { Classification } from "../../types.js";
  * - `gateway`: a technical failure on the gateway, bank or network side. Counts fully.
  * - `unknown`: merchant/integration problems or ambiguous causes. Counts partially.
  *
- * Reasons not listed here (for example the generic `payment_failed`) fall back to the
+ * Reasons in `RAZORPAY_SOURCE_DECIDED_REASONS` are classified by `error_source` only.
+ * Other reasons not listed here (for example the generic `payment_failed`) fall back to the
  * error `source`, then to the error `code`, then to `unknown`.
  */
 export interface RazorpayReasonRule {
@@ -30,11 +31,6 @@ export const RAZORPAY_REASON_CLASSIFICATION: readonly RazorpayReasonRule[] = [
     description: "Customer cancelled the payment",
   },
   {
-    reason: "payment_timed_out",
-    classification: "customer",
-    description: "Customer did not complete the payment in time",
-  },
-  {
     reason: "payment_session_expired",
     classification: "customer",
     description: "Payment session expired before completion",
@@ -48,11 +44,6 @@ export const RAZORPAY_REASON_CLASSIFICATION: readonly RazorpayReasonRule[] = [
     reason: "collect_request_pending",
     classification: "customer",
     description: "A collect request is already awaiting the customer",
-  },
-  {
-    reason: "authentication_failed",
-    classification: "customer",
-    description: "3DS/OTP authentication failed or was abandoned",
   },
   // Customer: wrong details entered
   { reason: "incorrect_otp", classification: "customer", description: "Wrong OTP entered" },
@@ -313,6 +304,24 @@ export const RAZORPAY_CODE_CLASSIFICATION: readonly {
   { code: "GATEWAY_ERROR", classification: "gateway" },
 ];
 
+/**
+ * Reasons Razorpay reports for both customer and provider-side failures. For these the
+ * reason alone says nothing about fault, so the `error_source` decides (via
+ * `RAZORPAY_SOURCE_CLASSIFICATION`); a missing or unlisted source gives `unknown`, with
+ * no further fallback to the error code.
+ */
+export const RAZORPAY_SOURCE_DECIDED_REASONS: readonly { reason: string; description: string }[] = [
+  {
+    reason: "payment_timed_out",
+    description: "Not completed in time: customer abandoned, or no response from bank/gateway",
+  },
+  {
+    reason: "authentication_failed",
+    description: "3DS/OTP authentication failed: customer abandoned, or issuer/ACS failure",
+  },
+];
+
+const sourceDecided = new Set(RAZORPAY_SOURCE_DECIDED_REASONS.map((r) => r.reason));
 const byReason = new Map(RAZORPAY_REASON_CLASSIFICATION.map((r) => [r.reason, r.classification]));
 const bySource = new Map(RAZORPAY_SOURCE_CLASSIFICATION.map((r) => [r.source, r.classification]));
 const byCode = new Map(RAZORPAY_CODE_CLASSIFICATION.map((r) => [r.code, r.classification]));
@@ -322,6 +331,9 @@ export function classifyRazorpay(error: {
   reason?: string;
   code?: string;
 }): Classification {
+  if (error.reason !== undefined && sourceDecided.has(error.reason)) {
+    return (error.source !== undefined ? bySource.get(error.source) : undefined) ?? "unknown";
+  }
   return (
     (error.reason !== undefined ? byReason.get(error.reason) : undefined) ??
     (error.source !== undefined ? bySource.get(error.source) : undefined) ??

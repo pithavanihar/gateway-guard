@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   RAZORPAY_REASON_CLASSIFICATION,
   RAZORPAY_SOURCE_CLASSIFICATION,
+  RAZORPAY_SOURCE_DECIDED_REASONS,
   classifyRazorpay,
 } from "../../../src/adapters/razorpay/classify.js";
 import type { Classification } from "../../../src/types.js";
@@ -11,7 +12,7 @@ import type { Classification } from "../../../src/types.js";
 describe("classifyRazorpay", () => {
   it.each<[string, Classification]>([
     ["payment_cancelled", "customer"],
-    ["payment_timed_out", "customer"],
+    ["otp_expired", "customer"],
     ["incorrect_otp", "customer"],
     ["insufficient_funds", "customer"],
     ["card_declined", "customer"],
@@ -25,6 +26,30 @@ describe("classifyRazorpay", () => {
     ["merchant_not_activated", "unknown"],
   ])("reason %s → %s", (reason, expected) => {
     expect(classifyRazorpay({ reason })).toBe(expected);
+  });
+
+  // R9/R10: these reasons mean "customer abandoned" OR "provider did not respond / ACS failed",
+  // so the error_source decides; a missing or unlisted source is unknown (no code fallback).
+  const sourceCases: [string | undefined, Classification][] = [
+    ["customer", "customer"],
+    ["bank", "gateway"],
+    ["gateway", "gateway"],
+    ["issuer", "gateway"],
+    ["issuer_bank", "gateway"],
+    ["network", "gateway"],
+    ["razorpay", "gateway"],
+    ["internal", "gateway"],
+    ["business", "unknown"],
+    ["customer_psp", "unknown"],
+    ["something_new", "unknown"],
+    [undefined, "unknown"],
+  ];
+  it.each(
+    ["payment_timed_out", "authentication_failed"].flatMap((reason) =>
+      sourceCases.map(([source, expected]) => [reason, source, expected] as const),
+    ),
+  )("source-decided reason %s with source %s → %s", (reason, source, expected) => {
+    expect(classifyRazorpay({ reason, source, code: "SERVER_ERROR" })).toBe(expected);
   });
 
   it("the reason wins over the source", () => {
@@ -60,5 +85,8 @@ describe("classifyRazorpay", () => {
     const reasons = RAZORPAY_REASON_CLASSIFICATION.map((r) => r.reason);
     expect(new Set(reasons).size).toBe(reasons.length);
     expect(RAZORPAY_SOURCE_CLASSIFICATION.length).toBeGreaterThan(0);
+    const decided = RAZORPAY_SOURCE_DECIDED_REASONS.map((r) => r.reason);
+    expect(decided).toEqual(["payment_timed_out", "authentication_failed"]);
+    for (const r of decided) expect(reasons).not.toContain(r);
   });
 });
