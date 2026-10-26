@@ -1,0 +1,33 @@
+{
+  "id": "pay_N8FUmetkCE2hZQ",
+  "entity": "payment",
+  "amount": 49900,
+  "currency": "INR",
+  "status": "failed",
+  "order_id": "order_RB58MiP5SPFYyM",
+  "invoice_id": null,
+  "international": false,
+  "method": "card",
+  "amount_refunded": 0,
+  "refund_status": null,
+  "captured": false,
+  "description": null,
+  "card_id": "card_DG4ZdUO3xABb20",
+  "bank": null,
+  "wallet": null,
+  "vpa": null,
+  "email": "customer@example.com",
+  "contact": "+919000090000",
+  "notes": {
+    "attemptId": "att_1"
+  },
+  "fee": null,
+  "tax": null,
+  "error_code": "BAD_REQUEST_ERROR",
+  "error_description": "Payment processing cancelled by user",
+  "error_source": "customer",
+  "error_step": "payment_authentication",
+  "error_reason": "payment_cancelled",
+  "acquirer_data": {},
+  "created_at": 1700000150
+}

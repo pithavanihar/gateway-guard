@@ -1,0 +1,16 @@
+{
+  "amount": 49900,
+  "amount_due": 49900,
+  "amount_paid": 0,
+  "attempts": 0,
+  "created_at": 1756455561,
+  "currency": "INR",
+  "entity": "order",
+  "id": "order_RB58MiP5SPFYyM",
+  "notes": {
+    "attemptId": "att_1"
+  },
+  "offer_id": null,
+  "receipt": "ord_1001",
+  "status": "created"
+}

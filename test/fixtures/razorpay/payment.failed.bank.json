@@ -1,0 +1,35 @@
+{
+  "id": "pay_N8FUmetkCE2hZP",
+  "entity": "payment",
+  "amount": 49900,
+  "currency": "INR",
+  "status": "failed",
+  "order_id": "order_RB58MiP5SPFYyM",
+  "invoice_id": null,
+  "international": false,
+  "method": "netbanking",
+  "amount_refunded": 0,
+  "refund_status": null,
+  "captured": false,
+  "description": null,
+  "card_id": null,
+  "bank": "HDFC",
+  "wallet": null,
+  "vpa": null,
+  "email": "customer@example.com",
+  "contact": "+919000090000",
+  "notes": {
+    "attemptId": "att_1"
+  },
+  "fee": null,
+  "tax": null,
+  "error_code": "BAD_REQUEST_ERROR",
+  "error_description": "Your payment could not be completed due to a temporary technical issue at the bank. To confirm if the amount was deducted, please check with your bank.",
+  "error_source": "bank",
+  "error_step": "payment_authorization",
+  "error_reason": "bank_technical_error",
+  "acquirer_data": {
+    "bank_transaction_id": null
+  },
+  "created_at": 1700000100
+}

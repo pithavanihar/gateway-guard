@@ -1,0 +1,36 @@
+{
+  "id": "pay_N8FVRD1DzYzBh1",
+  "entity": "payment",
+  "amount": 49900,
+  "currency": "INR",
+  "status": "captured",
+  "order_id": "order_RB58MiP5SPFYyM",
+  "invoice_id": null,
+  "international": false,
+  "method": "upi",
+  "amount_refunded": 0,
+  "refund_status": null,
+  "captured": true,
+  "description": null,
+  "card_id": null,
+  "bank": null,
+  "wallet": null,
+  "vpa": "success@razorpay",
+  "email": "customer@example.com",
+  "contact": "+919000090000",
+  "notes": {
+    "attemptId": "att_1"
+  },
+  "fee": 2,
+  "tax": 0,
+  "error_code": null,
+  "error_description": null,
+  "error_source": null,
+  "error_step": null,
+  "error_reason": null,
+  "acquirer_data": {
+    "rrn": "267567962619",
+    "upi_transaction_id": "F5B66C7C07CA6FEAD77E956DC2FC7ABE"
+  },
+  "created_at": 1700000200
+}

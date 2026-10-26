@@ -3,3 +3,7 @@ export * from "./errors.js";
 export * from "./health/HealthTracker.js";
 export * from "./router/Router.js";
 export * from "./attempts/AttemptRegistry.js";
+export * from "./http.js";
+export * from "./adapters/Adapter.js";
+export * from "./adapters/razorpay/classify.js";
+export * from "./adapters/razorpay/RazorpayAdapter.js";

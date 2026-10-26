@@ -1,0 +1,44 @@
+{
+  "entity": "event",
+  "account_id": "acc_BFQ7uQEaa7j2z7",
+  "event": "payment.failed",
+  "contains": ["payment"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_DESlLckIVRDHWU",
+        "entity": "payment",
+        "amount": 49900,
+        "currency": "INR",
+        "status": "failed",
+        "order_id": "order_RB58MiP5SPFYyM",
+        "invoice_id": null,
+        "international": false,
+        "method": "upi",
+        "amount_refunded": 0,
+        "refund_status": null,
+        "captured": false,
+        "description": null,
+        "card_id": null,
+        "bank": null,
+        "wallet": null,
+        "vpa": "customer@okbank",
+        "email": "customer@example.com",
+        "contact": "+919000090000",
+        "notes": [],
+        "fee": null,
+        "tax": null,
+        "error_code": "BAD_REQUEST_ERROR",
+        "error_description": "Payment failed",
+        "error_source": "customer",
+        "error_step": "payment_authentication",
+        "error_reason": "payment_failed",
+        "acquirer_data": {
+          "rrn": null
+        },
+        "created_at": 1567610214
+      }
+    }
+  },
+  "created_at": 1567610215
+}
