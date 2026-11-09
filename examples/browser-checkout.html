@@ -13,39 +13,61 @@
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
     <script>
-      let failedAttemptId; // set after a failure: the next click retries it elsewhere
+      // The latest attempt of this order, and what happened to it:
+      //   "dismissed": checkout closed without paying -> the next click reopens it (resume)
+      //   "failed":    the payment failed -> the next click retries it on another gateway
+      let lastAttemptId;
+      let lastState;
       const status = (text) => (document.getElementById("status").textContent = text);
+
+      async function post(url, body) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body ?? {}),
+        });
+        const json = await res.json();
+        if (!res.ok) throw Object.assign(new Error(json.reason ?? json.error), json);
+        return json;
+      }
 
       // Ask your server (examples/server-express.ts) for a payment. To retry a failed one,
       // pass the failed attempt's id as `retryOf`: the retry is routed to another gateway.
-      async function createPayment(retryOf) {
-        const res = await fetch("/payments", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            orderId: "order-1001",
-            amountMinor: 49900, // paise: this is Rs 499
-            method: "upi",
-            customer: { id: "cust-1", phone: "9999999999" },
-            retryOf,
-          }),
-        });
-        if (!res.ok) throw new Error((await res.json()).reason ?? "could not create payment");
-        return res.json(); // { attemptId, gateway, checkout }
+      function createPayment(retryOf) {
+        return post("/payments", {
+          orderId: "order-1001",
+          amountMinor: 49900, // paise: this is Rs 499
+          method: "upi",
+          customer: { id: "cust-1", phone: "9999999999" },
+          retryOf,
+        }); // { attemptId, gateway, checkout }
       }
 
-      async function verify(attemptId, payload) {
-        const res = await fetch(`/payments/${attemptId}/verify`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        return res.json();
+      // Reopen the checkout the customer closed. If it can't be resumed any more (it failed
+      // or expired meanwhile), fall back to a retry; "paid" means there is nothing to do.
+      async function resumeOrRetry(attemptId) {
+        try {
+          return await post(`/payments/${attemptId}/resume`);
+        } catch (err) {
+          if (err.reason === "paid") throw err;
+          return createPayment(attemptId);
+        }
       }
 
-      async function pay(retryOf) {
-        const { attemptId, checkout } = await createPayment(retryOf);
-        failedAttemptId = undefined;
+      const verify = (attemptId, payload) => post(`/payments/${attemptId}/verify`, payload);
+
+      function settle(attemptId, state, text) {
+        lastAttemptId = attemptId;
+        lastState = state;
+        status(text);
+      }
+
+      async function pay() {
+        const { attemptId, checkout } =
+          lastState === "dismissed"
+            ? await resumeOrRetry(lastAttemptId)
+            : await createPayment(lastState === "failed" ? lastAttemptId : undefined);
+        settle(attemptId, undefined, "Checkout open...");
 
         if (checkout.gateway === "razorpay") {
           new Razorpay({
@@ -56,20 +78,16 @@
             handler: async (response) => {
               // { razorpay_order_id, razorpay_payment_id, razorpay_signature }
               const outcome = await verify(attemptId, response);
-              status(`Razorpay: ${outcome.status}`);
-              if (outcome.status === "failed") failedAttemptId = attemptId;
+              const state = outcome.status === "failed" ? "failed" : undefined;
+              settle(attemptId, state, `Razorpay: ${outcome.status}`);
             },
             modal: {
-              ondismiss: () => {
-                failedAttemptId = attemptId;
-                status("Closed. Click Pay to try again.");
-              },
+              // Closed without paying: reopen the same checkout next time, don't retry.
+              ondismiss: () => settle(attemptId, "dismissed", "Closed. Click Pay to continue."),
             },
           })
-            .on("payment.failed", () => {
-              failedAttemptId = attemptId;
-              status("Payment failed. Click Pay to retry on another gateway.");
-            })
+            // Razorpay keeps the modal open so the customer can try again inside it.
+            .on("payment.failed", () => status("Payment failed. Try again or close to retry."))
             .open();
         } else if (checkout.gateway === "cashfree") {
           const cashfree = Cashfree({ mode: checkout.mode }); // "sandbox" or "production"
@@ -79,12 +97,21 @@
           });
           // Cashfree's return carries no signature: the server re-fetches the status itself.
           const outcome = await verify(attemptId, {});
-          if (result.error || outcome.status === "failed") failedAttemptId = attemptId;
-          status(`Cashfree: ${result.error ? result.error.message : outcome.status}`);
+          if (outcome.status === "failed") {
+            settle(attemptId, "failed", "Payment failed. Click Pay to retry on another gateway.");
+          } else if (outcome.status === "pending" && result.error) {
+            settle(attemptId, "dismissed", "Closed. Click Pay to continue.");
+          } else {
+            settle(attemptId, undefined, `Cashfree: ${outcome.status}`);
+          }
         }
       }
 
-      document.getElementById("pay").addEventListener("click", () => pay(failedAttemptId));
+      document
+        .getElementById("pay")
+        .addEventListener("click", () =>
+          pay().catch((err) => status(err.reason === "paid" ? "Already paid." : err.message)),
+        );
     </script>
   </body>
 </html>

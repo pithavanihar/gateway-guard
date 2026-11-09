@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayName, PaymentMethod } from "../types.js";
+import type { Checkout, GatewayName, PaymentMethod } from "../types.js";
 
 export interface Attempt {
   attemptId: string;
@@ -10,6 +10,10 @@ export interface Attempt {
   amountMinor: number;
   createdAt: number;
   final?: "paid" | "failed";
+  /** The checkout returned for this attempt, kept for `GatewayGuard.resume`. Not in events. */
+  checkout?: Checkout;
+  /** Set once the gateway order was cancelled (before a retry), so it is never cancelled twice. */
+  cancelled?: true;
 }
 
 export function newAttemptId(): string {

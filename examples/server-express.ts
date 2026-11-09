@@ -82,6 +82,21 @@ app.post("/payments", async (req, res) => {
   }
 });
 
+// 1b. The customer closed the checkout without paying: hand back the SAME checkout so the
+//     browser reopens it. No new gateway order, so no chance of paying twice. If it can no
+//     longer be resumed (409), the browser retries with `retryOf` instead.
+app.post("/payments/:attemptId/resume", (req, res) => {
+  try {
+    res.json(guard.resume(req.params.attemptId)); // { attemptId, gateway, checkout }
+  } catch (err) {
+    if (err instanceof RetryNotAllowedError) {
+      res.status(409).json({ error: "resume-not-allowed", reason: err.reason });
+    } else {
+      throw err;
+    }
+  }
+});
+
 // 2. The browser posts back what the gateway's checkout returned. Verify it server-side.
 app.post("/payments/:attemptId/verify", async (req, res) => {
   try {

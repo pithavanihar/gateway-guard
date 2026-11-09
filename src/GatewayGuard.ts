@@ -13,7 +13,6 @@ import {
 import { type HealthOptions, type PairHealth, HealthTracker } from "./health/HealthTracker.js";
 import { type RouteReason, Router } from "./router/Router.js";
 import type {
-  AttemptStatus,
   Checkout,
   Classification,
   Customer,
@@ -202,15 +201,44 @@ export class GatewayGuard {
         gatewayRef: created.gatewayRef,
         amountMinor,
         createdAt: this.now(),
+        checkout: created.checkout,
       };
       this.registry.add(attempt);
       this.latestByOrder.set(orderId, attemptId);
       const reason: RouteReason =
         i === 0 ? plan.reason : plan.reason === "all-down" ? "all-down" : "failover";
-      this.emit({ type: "attempt.created", attempt: { ...attempt }, reason });
+      this.emit({ type: "attempt.created", attempt: snapshot(attempt), reason });
       return { attemptId, gateway, checkout: created.checkout };
     }
     throw lastError;
+  }
+
+  /**
+   * Returns the checkout of an attempt again, so a checkout the customer closed without
+   * paying can be reopened instead of retried. No gateway call is made.
+   *
+   * Throws `RetryNotAllowedError`:
+   * - `unknown-attempt`: the id is unknown or has expired (expired attempts are forgotten);
+   * - `paid`: the attempt, or another attempt of its order, is confirmed paid;
+   * - `in-progress`: a `createPayment` for the order is running;
+   * - `superseded`: the attempt was retried, its gateway order was cancelled, or it has
+   *   already failed (retry it with `retryOf` instead).
+   */
+  resume(attemptId: string): CreatePaymentResult {
+    const attempt = this.registry.get(attemptId);
+    if (!attempt || !attempt.checkout) throw new RetryNotAllowedError("unknown-attempt");
+    if (attempt.final === "paid" || this.paidByOrder.has(attempt.orderId)) {
+      throw new RetryNotAllowedError("paid");
+    }
+    if (this.inFlight.has(attempt.orderId)) throw new RetryNotAllowedError("in-progress");
+    if (
+      this.latestAttempt(attempt.orderId)?.attemptId !== attemptId ||
+      attempt.final === "failed" ||
+      attempt.cancelled
+    ) {
+      throw new RetryNotAllowedError("superseded");
+    }
+    return { attemptId, gateway: attempt.gateway, checkout: attempt.checkout };
   }
 
   async verifyPayment(attemptId: string, callbackPayload: unknown): Promise<Outcome> {
@@ -257,21 +285,42 @@ export class GatewayGuard {
     if (this.paidByOrder.has(orderId)) throw new RetryNotAllowedError("paid");
 
     const adapter = this.adapter(prev.gateway);
-    refuseUnlessFailed(await statusOf(adapter, prev.gatewayRef));
+    refuseUnlessRetryable(await this.lookup(adapter, prev));
 
-    if (adapter.cancelOrder) {
+    // A cancelled order stays cancelled: a retry whose creation failed on every gateway
+    // can be retried again without a second cancel.
+    if (adapter.cancelOrder && !prev.cancelled) {
       try {
         await adapter.cancelOrder(prev.gatewayRef);
       } catch (err) {
         if (err instanceof GatewayRequestError && err.reason === "order_paid") {
-          refuseUnlessFailed(await statusOf(adapter, prev.gatewayRef));
+          refuseUnlessRetryable(await this.lookup(adapter, prev));
         }
         // Paid-then-failed is contradictory; any other cancel failure leaves the old order
         // possibly payable. Either way a second order is not safe.
         throw new RetryNotAllowedError("status-unknown");
       }
+      prev.cancelled = true;
     }
     return prev.gateway;
+  }
+
+  /**
+   * Fetches the attempt's status and settles a final one (paid or failed) exactly as a
+   * callback or webhook would, so outcomes seen only here still reach health, once.
+   * Returns null when the lookup itself failed.
+   */
+  private async lookup(adapter: GatewayAdapter, attempt: Attempt): Promise<StatusResult | null> {
+    let result: StatusResult;
+    try {
+      result = await adapter.fetchStatus(attempt.gatewayRef);
+    } catch {
+      return null;
+    }
+    if (result.status === "paid" || result.status === "failed") {
+      this.settle(attempt, result.status, result.classification, result.reason);
+    }
+    return result;
   }
 
   /** Applies a final outcome once per attempt: health record + event. */
@@ -287,7 +336,7 @@ export class GatewayGuard {
         this.registry.supersedeWithPaid(attempt.attemptId);
       if (first) {
         this.tracker.record(attempt.gateway, attempt.method, { ok: true });
-        this.emit({ type: "attempt.succeeded", attempt: { ...attempt } });
+        this.emit({ type: "attempt.succeeded", attempt: snapshot(attempt) });
       }
       this.notePaid(attempt);
     } else if (status === "failed") {
@@ -296,7 +345,7 @@ export class GatewayGuard {
       this.tracker.record(attempt.gateway, attempt.method, { ok: false, classification: c });
       const event: GuardEvent = {
         type: "attempt.failed",
-        attempt: { ...attempt },
+        attempt: snapshot(attempt),
         classification: c,
         countedForHealth: c !== "customer",
       };
@@ -318,7 +367,7 @@ export class GatewayGuard {
       this.emit({
         type: "order.multiple-payments",
         orderId: attempt.orderId,
-        attempts: [...paid.values()].map((a) => ({ ...a })),
+        attempts: [...paid.values()].map(snapshot),
       });
     }
   }
@@ -355,21 +404,20 @@ export class GatewayGuard {
   }
 }
 
-async function statusOf(
-  adapter: GatewayAdapter,
-  gatewayRef: string,
-): Promise<AttemptStatus | "unknown"> {
-  try {
-    const result: StatusResult = await adapter.fetchStatus(gatewayRef);
-    return result.status;
-  } catch {
-    return "unknown";
-  }
+/** A copy of an attempt for event payloads, without the internal checkout and cancel flag. */
+function snapshot(attempt: Attempt): Attempt {
+  const { checkout: _checkout, cancelled: _cancelled, ...rest } = attempt;
+  return rest;
 }
 
-function refuseUnlessFailed(status: AttemptStatus | "unknown"): void {
-  if (status === "failed") return;
+/**
+ * A retry may follow an attempt that failed, or one whose checkout was opened and closed
+ * without a payment (`created`). Anything else could still charge the customer.
+ */
+function refuseUnlessRetryable(result: StatusResult | null): void {
+  const status = result?.status;
+  if (status === "failed" || status === "created") return;
   if (status === "paid") throw new RetryNotAllowedError("paid");
-  if (status === "pending" || status === "created") throw new RetryNotAllowedError("pending");
+  if (status === "pending") throw new RetryNotAllowedError("pending");
   throw new RetryNotAllowedError("status-unknown");
 }
