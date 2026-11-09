@@ -587,4 +587,14 @@ describe("cancelOrder (R13)", () => {
     expect(err).toBeInstanceOf(Error);
     expect(`${err.message} ${err.stack ?? ""} ${JSON.stringify(err)}`).not.toContain(cfg.secretKey);
   });
+
+  it("verifyWebhook rejects a parsed body with a ValidationError", () => {
+    const { cf } = adapter();
+    expect(() =>
+      cf.verifyWebhook({ type: "PAYMENT_SUCCESS_WEBHOOK" } as unknown as string, {
+        "x-webhook-signature": "abc",
+        "x-webhook-timestamp": "1",
+      }),
+    ).toThrow(new ValidationError("pass the raw request body"));
+  });
 });

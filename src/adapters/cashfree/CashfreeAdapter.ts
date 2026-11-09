@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { GatewayRequestError, InvalidSignatureError, ValidationError } from "../../errors.js";
 import { fetchJson, type HttpDeps } from "../../http.js";
 import type { Checkout, Outcome, PaymentMethod } from "../../types.js";
-import { headerValue, isRecord, safeEqual } from "../signature.js";
+import { headerValue, isRecord, rawBodyBytes, safeEqual } from "../signature.js";
 import type { CreateOrderInput, GatewayAdapter, StatusResult, WebhookEvent } from "../Adapter.js";
 import { classifyCashfree } from "./classify.js";
 
@@ -257,10 +257,10 @@ export class CashfreeAdapter implements GatewayAdapter {
     rawBody: string | Uint8Array,
     headers: Record<string, string | string[] | undefined>,
   ): WebhookEvent {
+    const bytes = rawBodyBytes(rawBody);
     const signature = headerValue(headers, "x-webhook-signature");
     const timestamp = headerValue(headers, "x-webhook-timestamp");
     if (!signature || !timestamp) throw new InvalidSignatureError("cashfree");
-    const bytes = typeof rawBody === "string" ? Buffer.from(rawBody, "utf8") : rawBody;
     // Cashfree signs timestamp + raw body (no separator), base64 HMAC-SHA256 with the secret key.
     const expected = createHmac("sha256", this.#secretKey)
       .update(timestamp, "utf8")

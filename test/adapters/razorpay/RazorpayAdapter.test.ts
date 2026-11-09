@@ -9,7 +9,7 @@ import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { RazorpayAdapter } from "../../../src/adapters/razorpay/RazorpayAdapter.js";
-import { InvalidSignatureError } from "../../../src/errors.js";
+import { InvalidSignatureError, ValidationError } from "../../../src/errors.js";
 
 const fixture = (name: string): string =>
   readFileSync(new URL(`../../fixtures/razorpay/${name}`, import.meta.url), "utf8");
@@ -297,5 +297,29 @@ describe("RazorpayAdapter", () => {
     for (const s of [cfg.keySecret, cfg.webhookSecret, basic]) {
       expect(dump).not.toContain(s);
     }
+  });
+
+  it("createOrder rejects less than 100 paise before any request", async () => {
+    const { rp, calls } = adapter();
+    await expect(
+      rp.createOrder({
+        attemptId: "att_1",
+        orderId: "ord_1001",
+        amountMinor: 99,
+        currency: "INR",
+        method: "upi",
+        customer: { id: "c1", phone: "9999999999" },
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("verifyWebhook rejects a parsed body with a ValidationError", () => {
+    const { rp } = adapter();
+    expect(() =>
+      rp.verifyWebhook({ event: "payment.captured" } as unknown as string, {
+        "x-razorpay-signature": "abc",
+      }),
+    ).toThrow(new ValidationError("pass the raw request body"));
   });
 });

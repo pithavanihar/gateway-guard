@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import { InvalidSignatureError, ValidationError } from "../../errors.js";
 import { fetchJson, type HttpDeps } from "../../http.js";
 import type { Checkout, Outcome, PaymentMethod } from "../../types.js";
-import { headerValue, isRecord, safeEqual } from "../signature.js";
+import { headerValue, isRecord, rawBodyBytes, safeEqual } from "../signature.js";
 import type { CreateOrderInput, GatewayAdapter, StatusResult, WebhookEvent } from "../Adapter.js";
 import { classifyRazorpay } from "./classify.js";
 
@@ -30,6 +30,9 @@ interface RazorpayPayment {
 interface RazorpayOrder {
   id: string;
 }
+
+/** Razorpay's minimum order amount is 100 paise (1 rupee). */
+export const RAZORPAY_MIN_AMOUNT_MINOR = 100;
 
 const PAID_STATUSES = new Set(["captured", "authorized", "refunded"]);
 const METHODS: Record<string, PaymentMethod> = {
@@ -90,6 +93,10 @@ export class RazorpayAdapter implements GatewayAdapter {
   }
 
   async createOrder(input: CreateOrderInput): Promise<{ gatewayRef: string; checkout: Checkout }> {
+    // Checked locally so a too-small amount (customer input) never reaches health.
+    if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < RAZORPAY_MIN_AMOUNT_MINOR) {
+      throw new ValidationError("razorpay amountMinor must be at least 100 (1 rupee)");
+    }
     const order = await this.#request<RazorpayOrder>("POST", "/orders", {
       amount: input.amountMinor,
       currency: input.currency,
@@ -155,9 +162,9 @@ export class RazorpayAdapter implements GatewayAdapter {
     rawBody: string | Uint8Array,
     headers: Record<string, string | string[] | undefined>,
   ): WebhookEvent {
+    const bytes = rawBodyBytes(rawBody);
     const signature = headerValue(headers, "x-razorpay-signature");
     if (!signature) throw new InvalidSignatureError("razorpay");
-    const bytes = typeof rawBody === "string" ? Buffer.from(rawBody, "utf8") : rawBody;
     if (!safeEqual(hmacHex(this.#cfg.webhookSecret, bytes), signature)) {
       throw new InvalidSignatureError("razorpay");
     }

@@ -1,4 +1,5 @@
 import type { GatewayAdapter, StatusResult, WebhookEvent } from "./adapters/Adapter.js";
+import { rawBodyBytes } from "./adapters/signature.js";
 import { CashfreeAdapter, type CashfreeConfig } from "./adapters/cashfree/CashfreeAdapter.js";
 import { RazorpayAdapter, type RazorpayConfig } from "./adapters/razorpay/RazorpayAdapter.js";
 import { type Attempt, AttemptRegistry, newAttemptId } from "./attempts/AttemptRegistry.js";
@@ -75,6 +76,9 @@ export class GatewayGuard {
   private readonly inFlight = new Set<string>();
 
   constructor(opts: GatewayGuardOptions) {
+    if (typeof opts?.gateways !== "object" || opts.gateways === null) {
+      throw new ValidationError("gateways is required");
+    }
     const now = opts.now ?? Date.now;
     const fetchFn: typeof fetch = opts.fetch ?? ((...args) => globalThis.fetch(...args));
     const deps = { fetch: fetchFn, timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS };
@@ -85,6 +89,7 @@ export class GatewayGuard {
       this.adapters.set("cashfree", new CashfreeAdapter(opts.gateways.cashfree, deps));
     }
     for (const adapter of opts.adapters ?? []) this.adapters.set(adapter.name, adapter);
+    validatePriority(opts.priority, [...this.adapters.keys()]);
 
     this.emitter = new GuardEmitter(opts.onListenerError);
     const healthDeps: { now: () => number; random?: () => number } = { now };
@@ -257,6 +262,7 @@ export class GatewayGuard {
     rawBody: string | Uint8Array,
     headers: Record<string, string | string[] | undefined>,
   ): WebhookEvent {
+    rawBodyBytes(rawBody); // a parsed body cannot be verified: fail with a clear error
     const event = this.adapter(gateway).verifyWebhook(rawBody, headers);
     const attempt = this.registry.findByGatewayRef(gateway, event.gatewayRef);
     if (!attempt) {
@@ -408,6 +414,27 @@ export class GatewayGuard {
 function snapshot(attempt: Attempt): Attempt {
   const { checkout: _checkout, cancelled: _cancelled, ...rest } = attempt;
   return rest;
+}
+
+/** The priority must list every configured gateway exactly once, and nothing else. */
+function validatePriority(priority: unknown, configured: GatewayName[]): void {
+  if (configured.length === 0) {
+    throw new ValidationError("configure at least one gateway in gateways");
+  }
+  if (!Array.isArray(priority) || priority.length === 0) {
+    throw new ValidationError("priority must list the configured gateways");
+  }
+  const seen = new Set<unknown>();
+  for (const g of priority) {
+    if (seen.has(g)) throw new ValidationError(`priority lists ${String(g)} more than once`);
+    seen.add(g);
+    if (!configured.includes(g as GatewayName)) {
+      throw new ValidationError(`priority lists ${String(g)}, which is not configured`);
+    }
+  }
+  for (const g of configured) {
+    if (!seen.has(g)) throw new ValidationError(`priority is missing configured gateway ${g}`);
+  }
 }
 
 /**

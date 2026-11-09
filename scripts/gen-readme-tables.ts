@@ -17,7 +17,7 @@ import {
 export const BEGIN = "<!-- BEGIN GENERATED TABLES (npm run docs:tables) -->";
 export const END = "<!-- END GENERATED TABLES -->";
 
-const cell = (s: string): string => s.replaceAll("|", "\|");
+const cell = (s: string): string => s.replaceAll("|", "\\|");
 
 function table(headers: string[], rows: string[][]): string {
   const line = (r: string[]): string => `| ${r.map(cell).join(" | ")} |`;

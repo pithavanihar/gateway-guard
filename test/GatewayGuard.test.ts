@@ -811,4 +811,60 @@ describe("GatewayGuard", () => {
     expect(retry).toBeDefined();
     expect(cf.cancelOrder).toHaveBeenCalledTimes(1);
   });
+
+  it("verifyWebhook rejects a parsed body with a ValidationError", () => {
+    const { guard } = setup();
+    expect(() => guard.verifyWebhook("razorpay", { ref: "x" } as unknown as string, good)).toThrow(
+      new ValidationError("pass the raw request body"),
+    );
+  });
+
+  describe("constructor validation", () => {
+    const rp = () => new FakeAdapter("razorpay");
+    const cf = () => new FakeAdapter("cashfree");
+    const cases: Array<[string, () => unknown]> = [
+      ["gateways missing", () => ({ priority: ["razorpay"] })],
+      ["no gateway configured", () => ({ gateways: {}, priority: ["razorpay"] })],
+      ["priority missing", () => ({ gateways: {}, adapters: [rp()] })],
+      ["priority empty", () => ({ gateways: {}, adapters: [rp()], priority: [] })],
+      [
+        "priority has a duplicate",
+        () => ({
+          gateways: {},
+          adapters: [rp(), cf()],
+          priority: ["razorpay", "cashfree", "razorpay"],
+        }),
+      ],
+      [
+        "priority names an unconfigured gateway",
+        () => ({ gateways: {}, adapters: [rp()], priority: ["razorpay", "cashfree"] }),
+      ],
+      [
+        "priority names phonepe without an adapter",
+        () => ({ gateways: {}, adapters: [rp()], priority: ["razorpay", "phonepe"] }),
+      ],
+      [
+        "a configured gateway is missing from priority",
+        () => ({ gateways: {}, adapters: [rp(), cf()], priority: ["razorpay"] }),
+      ],
+    ];
+    for (const [name, opts] of cases) {
+      it(`throws ValidationError: ${name}`, () => {
+        expect(
+          () => new GatewayGuard(opts() as ConstructorParameters<typeof GatewayGuard>[0]),
+        ).toThrow(ValidationError);
+      });
+    }
+
+    it("accepts phonepe when an adapter for it is injected", () => {
+      expect(
+        () =>
+          new GatewayGuard({
+            gateways: {},
+            adapters: [rp(), new FakeAdapter("phonepe")],
+            priority: ["phonepe", "razorpay"],
+          }),
+      ).not.toThrow();
+    });
+  });
 });
