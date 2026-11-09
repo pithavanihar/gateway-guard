@@ -21,6 +21,7 @@
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
+    "test:sandbox": "vitest run --config vitest.sandbox.config.ts",
     "test:cov": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "format:check": "prettier --check .",
