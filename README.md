@@ -448,7 +448,7 @@ Honest status, as of v1.0.0:
 | Unit tests: classifier tables, health tracker (fake clock), router, retry rules, attempts, validation, events         | Pass locally (Node 22)                                                                                   |
 | Adapter contract tests against **mocked HTTP** responses written from each gateway's public documentation             | Pass locally, no credentials needed                                                                      |
 | Simulation test of the story above (a method fails on one gateway, traffic moves, the gateway is probed and recovers) | Passes locally                                                                                           |
-| CI workflow (Prettier check, `tsc`, Vitest, build) on Node 18, 20 and 22                                              | **Defined, not yet run**: the repository has not been pushed yet                                         |
+| CI workflow (Prettier check, `tsc`, Vitest, build) on Node 18, 20 and 22                                              | **Passing** on every push (GitHub Actions)                                                               |
 | Live sandbox smoke tests (`npm run test:sandbox`)                                                                     | **Written, but not yet run against real Razorpay or Cashfree sandboxes. Sandbox verification: pending.** |
 
 Until that run happens, treat the adapters as verified against documentation, not against the live gateways. Reports from real sandbox or production use are welcome as issues.

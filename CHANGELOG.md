@@ -42,8 +42,6 @@ First release.
 - Razorpay automatic capture is assumed: an `authorized` payment counts as paid.
 - Razorpay orders cannot be cancelled, so a late payment on an old order after a retry is
   detected (`order.multiple-payments`), not prevented.
-- The CI workflow (Prettier, `tsc`, Vitest on Node 18, 20 and 22) is defined but has not run yet,
-  because the repository has not been pushed.
 - Live sandbox smoke tests exist (`npm run test:sandbox`) but have not yet been run against real
   Razorpay or Cashfree sandboxes.
 
