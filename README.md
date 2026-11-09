@@ -81,7 +81,10 @@ const { attemptId, gateway, checkout } = await guard.createPayment({
 });
 // Send `checkout` to the browser. It tells the frontend which gateway SDK to open and with what.
 
-// 2. A payment failed and the customer retries: pass the failed attemptId.
+// 2a. The customer closed the checkout without paying: reopen the same one.
+const again = guard.resume(attemptId); // same { attemptId, gateway, checkout }, no gateway call
+
+// 2b. A payment failed and the customer retries: pass the failed attemptId.
 const retry = await guard.createPayment({ /* same fields */ retryOf: attemptId });
 // retry.gateway is a different gateway whenever another one is usable.
 
@@ -104,7 +107,20 @@ app.post("/webhooks/:gateway", express.raw({ type: "*/*" }), (req, res) => {
 });
 ```
 
-Full runnable versions: [`examples/server-express.ts`](examples/server-express.ts) (create, verify and webhook routes) and [`examples/browser-checkout.html`](examples/browser-checkout.html) (launching Razorpay Checkout.js or Cashfree's JS SDK from the `checkout` object).
+Passing a parsed object (for example from `express.json()`) throws `ValidationError("pass the raw request body")`.
+
+### Webhooks to enable
+
+Point each gateway's webhook at your route and subscribe to these events:
+
+| Gateway  | Events                                                                              | Webhook secret                                        |
+| -------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Razorpay | `payment.captured`, `payment.failed`                                                | the `webhookSecret` you set in the Razorpay dashboard |
+| Cashfree | `PAYMENT_SUCCESS_WEBHOOK`, `PAYMENT_FAILED_WEBHOOK`, `PAYMENT_USER_DROPPED_WEBHOOK` | your Cashfree `secretKey` (Cashfree signs with it)    |
+
+Other events are verified and returned with `status: "other"` and do not change health or attempts. That includes Razorpay's `order.paid`: enable `payment.captured` for payment confirmation.
+
+Full runnable versions: [`examples/server-express.ts`](examples/server-express.ts) (create, resume, verify and webhook routes) and [`examples/browser-checkout.html`](examples/browser-checkout.html) (launching Razorpay Checkout.js or Cashfree's JS SDK from the `checkout` object, reopening a closed checkout and retrying a failed one).
 
 `checkout` is a small tagged object:
 
@@ -122,18 +138,31 @@ A retry is `createPayment({ ..., retryOf: previousAttemptId })`. To make double 
 | `reason`          | Meaning                                                                                                                                  |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `paid`            | The order has already been paid.                                                                                                         |
-| `pending`         | The previous attempt is still pending at its gateway.                                                                                    |
+| `pending`         | The previous attempt is still pending at its gateway (a payment was started and has no final result yet).                                |
 | `status-unknown`  | The previous attempt's status could not be confirmed, or its order could not be stopped.                                                 |
 | `unknown-attempt` | `retryOf` is not an attempt this instance knows (wrong id, expired, or the process restarted).                                           |
 | `superseded`      | `retryOf` is not the latest attempt of its order, **or** you called `createPayment` without `retryOf` for an order that already has one. |
 | `in-progress`     | Another `createPayment` for the same `orderId` is still running.                                                                         |
 
 - A retry goes to **another gateway**, and only the **latest** attempt of an order can be retried.
-- Before routing a retry, the previous attempt's final status is fetched from its gateway.
+- Before routing a retry, the previous attempt's status is fetched from its gateway. A retry is allowed when that attempt **failed**, or when its checkout was **opened and closed without any payment** (status `created`). A failed or paid status found here is recorded exactly as a callback or webhook would be (once per attempt), so failures you never verified still reach health.
 - **Cashfree orders are terminated** before a retry is created, so the old session can no longer be paid. If it cannot be terminated, the retry is refused (`status-unknown`).
 - Razorpay orders cannot be cancelled. See [Safety and limits](#safety-and-limits).
 
-Input limits worth knowing: `orderId` is at most 40 characters; `amountMinor` is a positive integer of paise. For Cashfree the amount must be at least 100 (Rs 1), `customer.phone` must be 10 digits or `+` followed by an international number, and `customer.id` is normalised to Cashfree's rules (non-alphanumerics dropped, padded to 3 characters, cut to 50). Invalid input throws `ValidationError`.
+### Reopening a closed checkout: `resume()`
+
+When the customer closes the checkout without paying, prefer `guard.resume(attemptId)` over a retry: it returns the same `{ attemptId, gateway, checkout }` for the browser to reopen, without creating another gateway order and without a gateway call. It is refused with a `RetryNotAllowedError`:
+
+| `reason`          | Meaning                                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| `unknown-attempt` | The attempt is unknown or has expired (expired attempts are forgotten, so the two look the same).              |
+| `paid`            | The attempt, or another attempt of its order, is confirmed paid.                                               |
+| `in-progress`     | A `createPayment` for the same `orderId` is running.                                                           |
+| `superseded`      | The attempt was retried, its gateway order was cancelled for a retry, or it has already failed. Retry instead. |
+
+The example browser page calls `resume` when the checkout is dismissed and falls back to a retry (`retryOf`) when resume is refused for any reason other than `paid`.
+
+Input limits worth knowing: `orderId` is at most 40 characters; `amountMinor` is a positive integer of paise and at least 100 (Rs 1) on both gateways; `customer.phone` is required for every gateway. For Cashfree, `customer.phone` must be 10 digits or `+` followed by an international number, and `customer.id` is normalised to Cashfree's rules (non-alphanumerics dropped, padded to 3 characters, cut to 50). Invalid input throws `ValidationError` before any request is sent, so it never affects health.
 
 ## What counts against a gateway
 
@@ -360,7 +389,7 @@ new GatewayGuard({
 });
 ```
 
-Every `health` field is optional; the values above are the defaults. `guard.health()` returns a snapshot of every `(gateway, method)` pair (`state`, `label`, `failureRate`, `countedAttempts`) for dashboards.
+`priority` must list every configured gateway exactly once, and nothing else (PhonePe has no built-in adapter in v1); otherwise the constructor throws `ValidationError`. Every `health` field is optional; the values above are the defaults. `guard.health()` returns a snapshot of every `(gateway, method)` pair (`state`, `label`, `failureRate`, `countedAttempts`) for dashboards.
 
 ## Events
 
@@ -382,6 +411,22 @@ off(); // unsubscribe
 
 Listeners run in isolation: one that throws never breaks the payment flow or other listeners. By default the error is reported with `process.emitWarning` (`GatewayGuardListenerWarning`); pass `onListenerError` to handle it yourself.
 
+## Errors
+
+All errors extend `GatewayGuardError` and carry a `code`. None of them include keys or secrets.
+
+| Error                                  | When                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `ValidationError`                      | Bad input or options (amount, phone, priority, a parsed webhook body, an unknown `attemptId` in `verifyPayment`). No request is sent. |
+| `InvalidSignatureError`                | A callback or webhook signature did not verify.                                                                                       |
+| `RetryNotAllowedError`                 | A retry or `resume()` was refused; see `err.reason` above.                                                                            |
+| `NoGatewayAvailableError`              | No configured gateway supports the requested `method`.                                                                                |
+| `GatewayRequestError` / `TimeoutError` | A gateway request failed. From `createPayment`, this is the last gateway's error after every gateway failed to create the order.      |
+
+## Advanced exports
+
+`fetchJson` (the timeout-aware JSON request helper the adapters use), `Router`, `HealthTracker` and `AttemptRegistry` are exported for writing a custom adapter (implement `GatewayAdapter` and pass it in `adapters`) or for advanced use. The classification rule tables and the built-in adapters are exported too.
+
 ## Safety and limits
 
 Read these before putting it in front of real money.
@@ -390,6 +435,7 @@ Read these before putting it in front of real money.
 - **Razorpay orders cannot be cancelled.** If a customer pays on an old Razorpay order after a retry has already moved them elsewhere, that late payment is **detected but not prevented**: `order.multiple-payments` fires when the second payment is confirmed (while the attempt is still remembered, 24 hours by default), and you need to refund it.
 - **A create timeout can leave an order at the gateway** that gateway-guard never registered. Nothing was returned to your app, so no customer is sent to it, but it may show up in your gateway dashboard.
 - **After the 24-hour attempt TTL, an `orderId` can be charged again.** The retry bookkeeping is forgotten once attempts expire.
+- **Razorpay auto-capture is assumed.** An `authorized` Razorpay payment is treated as paid. Enable automatic capture in your Razorpay account; if you capture manually, an authorised payment you never capture is still reported as paid.
 - A customer already on a gateway's payment page cannot be moved mid-payment; switching happens on the next payment or retry.
 - Keys are only passed to the constructor, and the library does not log anything itself.
 
@@ -399,9 +445,10 @@ Honest status, as of v1.0.0:
 
 | What                                                                                                                  | Status                                                                                                   |
 | --------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Unit tests: classifier tables, health tracker (fake clock), router, retry rules, attempts, validation, events         | Run in CI on Node 18, 20 and 22                                                                          |
-| Adapter contract tests against **mocked HTTP** responses written from each gateway's public documentation             | Run in CI, no credentials needed                                                                         |
-| Simulation test of the story above (a method fails on one gateway, traffic moves, the gateway is probed and recovers) | Run in CI                                                                                                |
+| Unit tests: classifier tables, health tracker (fake clock), router, retry rules, attempts, validation, events         | Pass locally (Node 22)                                                                                   |
+| Adapter contract tests against **mocked HTTP** responses written from each gateway's public documentation             | Pass locally, no credentials needed                                                                      |
+| Simulation test of the story above (a method fails on one gateway, traffic moves, the gateway is probed and recovers) | Passes locally                                                                                           |
+| CI workflow (Prettier check, `tsc`, Vitest, build) on Node 18, 20 and 22                                              | **Defined, not yet run**: the repository has not been pushed yet                                         |
 | Live sandbox smoke tests (`npm run test:sandbox`)                                                                     | **Written, but not yet run against real Razorpay or Cashfree sandboxes. Sandbox verification: pending.** |
 
 Until that run happens, treat the adapters as verified against documentation, not against the live gateways. Reports from real sandbox or production use are welcome as issues.
@@ -425,7 +472,7 @@ Until that run happens, treat the adapters as verified against documentation, no
 
 ```bash
 npm ci
-npm run check        # typecheck, format check, tests
+npm run check        # tsc typecheck, Prettier format check, Vitest tests (no ESLint)
 npm run build        # ESM + CJS + types into dist/
 npm run docs:tables  # regenerate the classification tables in this README
 npm run test:sandbox # live sandbox smoke tests; needs keys in .env.local
