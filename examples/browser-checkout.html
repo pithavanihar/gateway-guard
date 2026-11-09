@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gateway-guard browser checkout</title>
+  </head>
+  <body>
+    <button id="pay">Pay</button>
+    <p id="status"></p>
+
+    <!-- Load both SDKs; only the one the server picked is used. -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="https://sdk.cashfree.com/js/v3/cashfree.js"></script>
+    <script>
+      let failedAttemptId; // set after a failure: the next click retries it elsewhere
+      const status = (text) => (document.getElementById("status").textContent = text);
+
+      // Ask your server (examples/server-express.ts) for a payment. To retry a failed one,
+      // pass the failed attempt's id as `retryOf`: the retry is routed to another gateway.
+      async function createPayment(retryOf) {
+        const res = await fetch("/payments", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            orderId: "order-1001",
+            amountMinor: 49900, // paise: this is Rs 499
+            method: "upi",
+            customer: { id: "cust-1", phone: "9999999999" },
+            retryOf,
+          }),
+        });
+        if (!res.ok) throw new Error((await res.json()).reason ?? "could not create payment");
+        return res.json(); // { attemptId, gateway, checkout }
+      }
+
+      async function verify(attemptId, payload) {
+        const res = await fetch(`/payments/${attemptId}/verify`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        return res.json();
+      }
+
+      async function pay(retryOf) {
+        const { attemptId, checkout } = await createPayment(retryOf);
+        failedAttemptId = undefined;
+
+        if (checkout.gateway === "razorpay") {
+          new Razorpay({
+            key: checkout.keyId,
+            order_id: checkout.orderId,
+            amount: checkout.amountMinor,
+            currency: checkout.currency,
+            handler: async (response) => {
+              // { razorpay_order_id, razorpay_payment_id, razorpay_signature }
+              const outcome = await verify(attemptId, response);
+              status(`Razorpay: ${outcome.status}`);
+              if (outcome.status === "failed") failedAttemptId = attemptId;
+            },
+            modal: {
+              ondismiss: () => {
+                failedAttemptId = attemptId;
+                status("Closed. Click Pay to try again.");
+              },
+            },
+          })
+            .on("payment.failed", () => {
+              failedAttemptId = attemptId;
+              status("Payment failed. Click Pay to retry on another gateway.");
+            })
+            .open();
+        } else if (checkout.gateway === "cashfree") {
+          const cashfree = Cashfree({ mode: checkout.mode }); // "sandbox" or "production"
+          const result = await cashfree.checkout({
+            paymentSessionId: checkout.paymentSessionId,
+            redirectTarget: "_modal",
+          });
+          // Cashfree's return carries no signature: the server re-fetches the status itself.
+          const outcome = await verify(attemptId, {});
+          if (result.error || outcome.status === "failed") failedAttemptId = attemptId;
+          status(`Cashfree: ${result.error ? result.error.message : outcome.status}`);
+        }
+      }
+
+      document.getElementById("pay").addEventListener("click", () => pay(failedAttemptId));
+    </script>
+  </body>
+</html>
